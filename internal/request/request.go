@@ -45,7 +45,9 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		numBytesRead, err := reader.Read(buffer[readToIndex:])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				request.state = requestStateDone
+				if request.state != requestStateDone {
+					return nil, fmt.Errorf("incomplete request")
+				}
 				break
 			}
 			return nil, fmt.Errorf("error reading from buffer: %v", err)
