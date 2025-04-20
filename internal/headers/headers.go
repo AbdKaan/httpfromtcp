@@ -43,7 +43,12 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	// key needs to be lower case
 	key = strings.ToLower(key)
 
-	h.Set(key, string(value))
+	if val, ok := h[key]; ok {
+		h[key] = fmt.Sprintf("%s, %s", val, value)
+	} else {
+		h.Set(key, string(value))
+	}
+
 	return idx + 2, false, nil
 }
 
