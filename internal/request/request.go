@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/AbdKaan/httpfromtcp/internal/headers"
@@ -13,6 +14,7 @@ import (
 type Request struct {
 	RequestLine RequestLine
 	Headers     headers.Headers
+	Body        []byte
 	state       requestState
 }
 
@@ -22,6 +24,7 @@ const (
 	requestStateInitialized requestState = iota
 	requestStateDone
 	requestStateParsingHeaders
+	requestStateParsingBody
 )
 
 type RequestLine struct {
@@ -37,7 +40,11 @@ const bufferSize = 8
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	buffer := make([]byte, bufferSize, bufferSize)
 	readToIndex := 0
-	request := Request{state: requestStateInitialized, Headers: headers.NewHeaders()}
+	request := Request{
+		state:   requestStateInitialized,
+		Headers: headers.NewHeaders(),
+		Body:    make([]byte, 0),
+	}
 	for request.state != requestStateDone {
 		// If the buffer is full, grow it
 		if readToIndex >= len(buffer) {
@@ -167,9 +174,36 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 			return 0, err
 		}
 		if done {
-			r.state = requestStateDone
+			r.state = requestStateParsingBody
 		}
 		return bytesParsed, nil
+	case requestStateParsingBody:
+		// Check if Content-Length exists
+		contentLength, ok := r.Headers.Get("content-length")
+		if !ok {
+			r.state = requestStateDone
+			return 0, nil
+		}
+
+		// Convert string Content-Length into int
+		contentLengthInt, err := strconv.Atoi(contentLength)
+		if err != nil {
+			return 0, fmt.Errorf("malformed Content-Length: %s", err)
+		}
+
+		// Append the data into r.Body
+		r.Body = append(r.Body, data...)
+
+		// Error if Body length is greater than Content-Length
+		if len(r.Body) > contentLengthInt {
+			return 0, fmt.Errorf("error: body length is greater than content-length")
+		}
+
+		// Done if Body length is equal to Content-Length
+		if len(r.Body) == contentLengthInt {
+			r.state = requestStateDone
+		}
+		return len(data), nil
 	case requestStateDone:
 		return 0, fmt.Errorf("error: trying to read data in a done state")
 	default:
