@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/AbdKaan/httpfromtcp/internal/headers"
 	"github.com/AbdKaan/httpfromtcp/internal/request"
 	"github.com/AbdKaan/httpfromtcp/internal/response"
 	"github.com/AbdKaan/httpfromtcp/internal/server"
@@ -42,6 +44,10 @@ func handler(w *response.Writer, req *request.Request) {
 	}
 	if req.RequestLine.RequestTarget == "/myproblem" {
 		handler500(w, req)
+		return
+	}
+	if req.RequestLine.RequestTarget == "/video" {
+		handlerVideo(w, req)
 		return
 	}
 	handler200(w, req)
@@ -104,6 +110,20 @@ func handler200(w *response.Writer, _ *request.Request) {
 	return
 }
 
+func handlerVideo(w *response.Writer, req *request.Request) {
+	w.WriteStatusLine(response.StatusCodeSuccess)
+	body, err := os.ReadFile("assets/vim.mp4")
+	if err != nil {
+		handler500(w, req)
+		return
+	}
+	h := response.GetDefaultHeaders(len(body))
+	h.Override("Content-Type", "video/mp4")
+	w.WriteHeaders(h)
+	w.WriteBody(body)
+	return
+}
+
 func proxyHandler(w *response.Writer, req *request.Request) {
 	target := strings.TrimPrefix(req.RequestLine.RequestTarget, "/httpbin/")
 	url := "https://httpbin.org/" + target
@@ -118,11 +138,13 @@ func proxyHandler(w *response.Writer, req *request.Request) {
 	w.WriteStatusLine(response.StatusCodeSuccess)
 	h := response.GetDefaultHeaders(0)
 	h.Override("Transfer-Encoding", "chunked")
+	h.Override("Trailer", "X-Content-SHA256, X-Content-Length")
 	h.Remove("Content-Length")
 	w.WriteHeaders(h)
 
 	const maxChunkSize = 1024
 	buffer := make([]byte, maxChunkSize)
+	fullBody := make([]byte, 0)
 	for {
 		n, err := resp.Body.Read(buffer)
 		fmt.Println("Read", n, "bytes")
@@ -132,6 +154,7 @@ func proxyHandler(w *response.Writer, req *request.Request) {
 				fmt.Println("Error writing chunked body:", err)
 				break
 			}
+			fullBody = append(fullBody, buffer[:n]...)
 		}
 		if err == io.EOF {
 			break
@@ -141,8 +164,18 @@ func proxyHandler(w *response.Writer, req *request.Request) {
 			break
 		}
 	}
+
 	_, err = w.WriteChunkedBodyDone()
 	if err != nil {
 		fmt.Println("Error writing chunked body done:", err)
 	}
+	trailers := headers.NewHeaders()
+	hashedBody := fmt.Sprintf("%x", sha256.Sum256(fullBody))
+	trailers.Set("X-Content-SHA256", hashedBody)
+	trailers.Set("X-Content-Length", fmt.Sprintf("%d", len(fullBody)))
+	err = w.WriteTrailers(trailers)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println("Wrote trailers")
 }
