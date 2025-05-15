@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -18,7 +17,7 @@ type Server struct {
 	handler  Handler
 }
 
-type Handler func(w io.Writer, req *request.Request) *HandlerError
+type Handler func(w *response.Writer, req *request.Request)
 
 type HandlerError struct {
 	StatusCode response.StatusCode
@@ -26,10 +25,11 @@ type HandlerError struct {
 }
 
 func (h HandlerError) Write(w io.Writer) {
-	response.WriteStatusLine(w, h.StatusCode)
+	writer := response.Writer{Writer: w}
+	writer.WriteStatusLine(h.StatusCode)
 	messageBytes := []byte(h.Message)
 	headers := response.GetDefaultHeaders(len(messageBytes))
-	response.WriteHeaders(w, headers)
+	writer.WriteHeaders(headers)
 	w.Write(messageBytes)
 }
 
@@ -74,30 +74,15 @@ func (s *Server) listen() {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
-
+	writer := response.NewWriter(conn)
 	req, err := request.RequestFromReader(conn)
 	if err != nil {
-		handlerErr := &HandlerError{
-			StatusCode: response.StatusCodeBadRequest,
-			Message:    err.Error(),
-		}
-		handlerErr.Write(conn)
+		writer.WriteStatusLine(response.StatusCodeBadRequest)
+		body := []byte(fmt.Sprintf("Error parsing request: %v", err))
+		writer.WriteHeaders(response.GetDefaultHeaders(len(body)))
+		writer.WriteBody(body)
 		return
 	}
-
-	buffer := bytes.NewBuffer([]byte{})
-	handlerErr := s.handler(buffer, req)
-
-	if handlerErr != nil {
-		handlerErr.Write(conn)
-		return
-	}
-	b := buffer.Bytes()
-	headers := response.GetDefaultHeaders(len(b))
-	response.WriteStatusLine(conn, response.StatusCodeSuccess)
-	if err := response.WriteHeaders(conn, headers); err != nil {
-		fmt.Printf("error: %v\n", err)
-	}
-	conn.Write(b)
+	s.handler(writer, req)
 	return
 }
